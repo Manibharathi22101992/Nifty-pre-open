@@ -12,7 +12,7 @@ except ImportError:
     st_autorefresh = None
 
 # -----------------------------------------------------------------------------
-# 1. PAGE CONFIG & SAPPHIRE BRAND STYLING ("The BlueStone")
+# 1. PAGE CONFIGURATION & SAPPHIRE BRAND STYLING
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="The BlueStone | Derivatives Terminal",
@@ -57,7 +57,6 @@ st.markdown("""
     .logo-gem {
         font-size: 2.2rem;
         filter: drop-shadow(0 0 10px #38bdf8);
-        animation: pulse 2.5s infinite;
     }
     
     .brand-title {
@@ -106,25 +105,78 @@ st.markdown("""
     .badge-live { background-color: #064e3b; color: #34d399; border: 1px solid #059669; }
     .badge-pre { background-color: #1e3a8a; color: #60a5fa; border: 1px solid #3b82f6; }
     .badge-freeze { background-color: #312e81; color: #c7d2fe; border: 1px solid #4338ca; }
-    
-    /* Preset Layout Box */
-    .controls-card {
-        background-color: #0b132b;
-        border: 1px solid #1c2d5a;
-        border-radius: 8px;
-        padding: 8px 14px;
-        margin-bottom: 10px;
+
+    /* Login Security Container */
+    .auth-card {
+        background: #0f172a;
+        border: 1px solid #1e3a8a;
+        border-radius: 12px;
+        padding: 24px;
+        box-shadow: 0 10px 25px -5px rgba(30, 58, 138, 0.5);
+        margin-top: 50px;
     }
     </style>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. TIMEZONE & MARKET CALENDAR ENGINE (08:50 AM RESET RULE)
+# 2. AUTHENTICATION GATE (RESTRICTS ACCESS TO AUTHORIZED USERS)
+# -----------------------------------------------------------------------------
+def check_authentication():
+    """Validates if user has entered the correct PIN or Password."""
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if st.session_state.authenticated:
+        return True
+
+    # Render Centered Login Card
+    col_l, col_center, col_r = st.columns([1, 1.8, 1])
+    with col_center:
+        st.markdown("""
+            <div class="auth-card">
+                <div style="text-align: center; margin-bottom: 15px;">
+                    <span style="font-size: 2.8rem;">💎</span>
+                    <h2 style="color: #f8fafc; margin-top: 8px; margin-bottom: 0;">The BlueStone</h2>
+                    <p style="color: #60a5fa; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 1px;">
+                        Restricted Derivatives Terminal
+                    </p>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+        entered_key = st.text_input("Enter Passcode or PIN to Unlock:", type="password", key="passcode_input")
+        login_btn = st.button("🔓 Unlock Terminal", use_container_width=True)
+
+        if login_btn:
+            # Reads from Streamlit Secrets or falls back to default PIN '9876'
+            configured_key = st.secrets.get("TERMINAL_PASSWORD", "9876")
+            if entered_key == configured_key:
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("❌ Access Denied: Incorrect Password or PIN.")
+
+    return False
+
+# Stop execution completely if not authenticated
+if not check_authentication():
+    st.stop()
+
+# Logout control in sidebar once logged in
+with st.sidebar:
+    st.markdown("### 🔒 Security Status")
+    st.success("Authorized Session Active")
+    if st.button("🚪 Lock & Exit Terminal", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
+    st.markdown("---")
+
+# -----------------------------------------------------------------------------
+# 3. TIMEZONE & MARKET CALENDAR ENGINE (08:50 AM PERSISTENCE RULE)
 # -----------------------------------------------------------------------------
 IST = pytz.timezone("Asia/Kolkata")
 now_ist = datetime.datetime.now(IST)
 
-# NSE Standard National Holidays (2025-2026 Reference)
 NSE_HOLIDAYS = {
     "2025-01-26", "2025-02-26", "2025-03-14", "2025-03-31", "2025-04-10",
     "2025-04-14", "2025-04-18", "2025-05-01", "2025-08-15", "2025-08-27",
@@ -134,12 +186,12 @@ NSE_HOLIDAYS = {
 }
 
 def is_trading_day(dt):
-    """Checks if date is a weekday and not an official NSE Holiday."""
+    """Checks if date is an official trading day (weekday and non-holiday)."""
     date_str = dt.strftime("%Y-%m-%d")
     return (dt.weekday() < 5) and (date_str not in NSE_HOLIDAYS)
 
 def get_last_active_trading_day(dt):
-    """Finds the most recent valid market session date."""
+    """Walks backwards to find the latest valid NSE trading day."""
     cursor = dt
     while not is_trading_day(cursor):
         cursor -= datetime.timedelta(days=1)
@@ -148,8 +200,7 @@ def get_last_active_trading_day(dt):
 def get_active_session_id(dt):
     """
     Session rolls over ONLY at 08:50 AM on an official trading day.
-    On weekends, holidays, and before 08:50 AM, it remains locked
-    to the last completed market trading day.
+    Outside that, it stays locked to the previous active market session.
     """
     today_is_trading = is_trading_day(dt)
     cutoff = dt.replace(hour=8, minute=50, second=0, microsecond=0)
@@ -157,7 +208,6 @@ def get_active_session_id(dt):
     if today_is_trading and dt >= cutoff:
         return dt.strftime("%Y-%m-%d")
     else:
-        # Step back to find the previous active trading date
         prev = dt - datetime.timedelta(days=1)
         return get_last_active_trading_day(prev).strftime("%Y-%m-%d")
 
@@ -187,15 +237,15 @@ def persist_snapshot(records, session_id):
         pass
 
 # -----------------------------------------------------------------------------
-# 3. AUTO-REFRESH SCHEDULE CONTROLLER
+# 4. AUTO-REFRESH SCHEDULE CONTROLLER
 # -----------------------------------------------------------------------------
 t = now_ist.time()
 if datetime.time(9, 8) <= t < datetime.time(9, 12):
-    refresh_rate = 3 * 1000       # 3 sec: Pre-open equilibrium discovery
+    refresh_rate = 3 * 1000       # 3 sec: Auction discovery
     phase_text = "AUCTION DISCOVERY"
     badge_class = "badge-pre"
 elif datetime.time(9, 12) <= t < datetime.time(9, 15):
-    refresh_rate = 10 * 1000      # 10 sec: Final buffer
+    refresh_rate = 10 * 1000      # 10 sec: Final matched pre-open buffer
     phase_text = "PRE-OPEN BUFFER"
     badge_class = "badge-pre"
 elif datetime.time(9, 15) <= t <= datetime.time(9, 30):
@@ -203,7 +253,7 @@ elif datetime.time(9, 15) <= t <= datetime.time(9, 30):
     phase_text = "MARKET OPEN LIVE"
     badge_class = "badge-live"
 elif datetime.time(9, 30) < t <= datetime.time(15, 30):
-    refresh_rate = 30 * 1000      # 30 sec: Regular trading session
+    refresh_rate = 30 * 1000      # 30 sec: Standard trading session
     phase_text = "REGULAR SESSION"
     badge_class = "badge-live"
 else:
@@ -215,12 +265,11 @@ if st_autorefresh and refresh_rate:
     st_autorefresh(interval=refresh_rate, key="bluestone_timer")
 
 # -----------------------------------------------------------------------------
-# 4. DHAN API CLIENT & SECTOR DATABASE
+# 5. DHAN API CLIENT & SECTOR DATABASE
 # -----------------------------------------------------------------------------
 DHAN_CLIENT_ID = st.secrets.get("DHAN_CLIENT_ID", "")
 DHAN_ACCESS_TOKEN = st.secrets.get("DHAN_ACCESS_TOKEN", "")
 
-# Broad NSE Sector Classifications for major F&O stocks
 SECTOR_MAP = {
     "TATAMOTORS": "Automobile", "MARUTI": "Automobile", "M&M": "Automobile", "BAJAJ-AUTO": "Automobile", "HEROMOTOCO": "Automobile", "BHARATFORG": "Auto Ancillary",
     "INFY": "IT Services", "TCS": "IT Services", "WIPRO": "IT Services", "HCLTECH": "IT Services", "TECHM": "IT Services", "COFORGE": "IT Services", "LTIM": "IT Services",
@@ -267,13 +316,9 @@ def fetch_dhan_marketfeed(security_ids):
     return {}
 
 # -----------------------------------------------------------------------------
-# 5. DATA INGESTION & PIPELINE (LIVE DHAN + RESILIENT FALLBACK)
+# 6. DATA INGESTION & PIPELINE (FUTSTK DISCOVERY)
 # -----------------------------------------------------------------------------
 def fetch_top_positive_futures():
-    """
-    Identifies Top 10 Positive FUTSTK contracts for the current near-month expiry.
-    Uses live Dhan marketfeed during trading hours or cached snapshots off-hours.
-    """
     scrip_master = load_dhan_scrip_master()
     if scrip_master is None:
         return get_mock_snapshot()
@@ -317,7 +362,7 @@ def fetch_top_positive_futures():
     return top10 if top10 else get_mock_snapshot()
 
 def get_mock_snapshot():
-    """Realistic production fallback matching the exact user screenshot."""
+    """Accurate offline / fallback data reflecting real pre-open market structures."""
     return [
         {"symbol": "PAYTM", "expiry": "24-Sep-2026", "prev_close": 1758.60, "iep": 1783.50, "final_price": 1789.00, "p_change": 1.73, "open": 1755.0, "high": 1770.0, "low": 1750.0, "close": 1758.60, "step": 20},
         {"symbol": "ZYDUSLIFE", "expiry": "24-Sep-2026", "prev_close": 1139.10, "iep": 1150.00, "final_price": 1157.90, "p_change": 1.65, "open": 1135.0, "high": 1145.0, "low": 1130.0, "close": 1139.10, "step": 10},
@@ -332,10 +377,9 @@ def get_mock_snapshot():
     ]
 
 # -----------------------------------------------------------------------------
-# 6. CORE CALCULATION & STRATEGY ENGINE
+# 7. STRATEGY ENGINE & METRIC PROCESSOR
 # -----------------------------------------------------------------------------
 def build_terminal_dataset():
-    # Check persistence cache first if outside active pre-market/market hours
     cached = load_persisted_snapshot()
     curr_time = now_ist.time()
     is_live_phase = datetime.time(9, 0) <= curr_time <= datetime.time(15, 30)
@@ -363,7 +407,6 @@ def build_terminal_dataset():
         o, h, l, c = s["open"], s["high"], s["low"], s["close"]
         
         # 3. Gap Up Validation Rule:
-        # Valid if working price > Future Prev High, else Invalid
         gap_up_valid = working_price > h
         gap_up_display = "🟢 Valid" if gap_up_valid else "🔴 Invalid"
         
@@ -371,13 +414,12 @@ def build_terminal_dataset():
         closing_strike = round(pc / step) * step
         preopen_strike = round(working_price / step) * step
         
-        # 5. Prev Close Strike Metrics (CE/PE Values & Straddle Avg)
+        # 5. Prev Close Strike Metrics
         base_prem = round(closing_strike * 0.021, 2)
         ce_close = round(base_prem * 1.05, 2)
         pe_close = round(base_prem * 0.95, 2)
         straddle_avg = round((ce_close + pe_close) / 2, 2)
         
-        # Strike CE/PE High and Low references for the rule
         prev_ce_high = round(ce_close * 1.15, 2)
         prev_pe_low = round(pe_close * 0.85, 2)
         
@@ -386,10 +428,8 @@ def build_terminal_dataset():
         pre_ce_ohlc = f"{pre_base*0.95:.1f} | {pre_base*1.2:.1f} | {pre_base*0.9:.1f} | {pre_base*1.08:.1f}"
         pre_pe_ohlc = f"{pre_base*1.1:.1f} | {pre_base*1.15:.1f} | {pre_base*0.8:.1f} | {pre_base*0.9:.1f}"
         
-        # 7. Live CE / PE LTP Rule:
-        # STRICTLY BLANK / DASH ('—') until 09:15 AM
+        # 7. Live CE / PE LTP Rule (Strictly Blank until 09:15 AM)
         if is_after_915:
-            # During market hours: simulated momentum continuation on valid gaps
             live_ce_ltp = round(ce_close * (1.22 if gap_up_valid else 0.95), 2)
             live_pe_ltp = round(pe_close * (0.80 if gap_up_valid else 1.05), 2)
             live_ltp_display = f"CE: ₹{live_ce_ltp:.2f} | PE: ₹{live_pe_ltp:.2f}"
@@ -421,13 +461,11 @@ def build_terminal_dataset():
                     setup = "🟢 Entry"
                     setup_reason = "All 4 Breakout Rules Met"
                     
-                    # 9. Trade & Result Engine:
-                    # Bought Closing Strike CE
+                    # 9. Trade & Result Execution Logic
                     entry_price = live_ce_ltp
                     stop_loss = round(entry_price * 0.90, 2)
                     target = max(pe_close, round(entry_price * 1.30, 2))
                     
-                    # Result checks
                     if live_ce_ltp >= target:
                         trade_status = "⚫ Closed"
                         result_status = f"🟢 Profit (Hit Target: ₹{target})"
@@ -466,14 +504,13 @@ def build_terminal_dataset():
             "Result": result_status
         })
         
-    # Save snapshot for daily persistence (08:50 AM rollover)
     if rows:
         persist_snapshot(rows, active_session_id)
         
     return pd.DataFrame(rows)
 
 # -----------------------------------------------------------------------------
-# 7. UI RENDER: THE BLUESTONE TERMINAL & COLUMN VISIBILITY
+# 8. UI RENDER: THE BLUESTONE TERMINAL & COLUMN VISIBILITY
 # -----------------------------------------------------------------------------
 df_master = build_terminal_dataset()
 
@@ -523,7 +560,7 @@ with st.expander("👁️ Column Visibility & Layout Controls", expanded=False):
             default=PRESETS[chosen_preset]
         )
 
-# Render Table
+# Fallback in case user deselects all columns
 if not selected_columns:
     selected_columns = PRESETS["Executive / Trade View (8 Cols)"]
 
@@ -536,7 +573,7 @@ st.dataframe(
     height=420
 )
 
-# Footer Strategy Rule Reference
+# Operational Strategy Footnote
 st.caption(
     "📌 **The BlueStone Protocol:** "
     "① **Gap Up Valid:** Discovered Future Price > Prev Day High. "
