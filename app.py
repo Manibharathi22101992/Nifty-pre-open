@@ -12,7 +12,7 @@ except ImportError:
     st_autorefresh = None
 
 # -----------------------------------------------------------------------------
-# 1. PAGE CONFIGURATION & SAPPHIRE BRAND STYLING
+# 1. PAGE CONFIG & STYLING
 # -----------------------------------------------------------------------------
 st.set_page_config(
     page_title="The BlueStone | Derivatives Terminal",
@@ -35,7 +35,6 @@ st.markdown("""
         padding-right: 1.2rem;
     }
     
-    /* The BlueStone Obsidian Header */
     .bluestone-header {
         background: radial-gradient(circle at top left, #1e3a8a 0%, #0f172a 60%, #020617 100%);
         border: 1px solid #1e40af;
@@ -106,7 +105,6 @@ st.markdown("""
     .badge-pre { background-color: #1e3a8a; color: #60a5fa; border: 1px solid #3b82f6; }
     .badge-freeze { background-color: #312e81; color: #c7d2fe; border: 1px solid #4338ca; }
 
-    /* Login Security Container */
     .auth-card {
         background: #0f172a;
         border: 1px solid #1e3a8a;
@@ -119,17 +117,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. AUTHENTICATION GATE (RESTRICTS ACCESS TO AUTHORIZED USERS)
+# 2. AUTHENTICATION GATE
 # -----------------------------------------------------------------------------
 def check_authentication():
-    """Validates if user has entered the correct PIN or Password."""
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
     if st.session_state.authenticated:
         return True
 
-    # Render Centered Login Card
     col_l, col_center, col_r = st.columns([1, 1.8, 1])
     with col_center:
         st.markdown("""
@@ -148,7 +144,6 @@ def check_authentication():
         login_btn = st.button("🔓 Unlock Terminal", use_container_width=True)
 
         if login_btn:
-            # Reads from Streamlit Secrets or falls back to default PIN '9876'
             configured_key = st.secrets.get("TERMINAL_PASSWORD", "9876")
             if entered_key == configured_key:
                 st.session_state.authenticated = True
@@ -158,21 +153,11 @@ def check_authentication():
 
     return False
 
-# Stop execution completely if not authenticated
 if not check_authentication():
     st.stop()
 
-# Logout control in sidebar once logged in
-with st.sidebar:
-    st.markdown("### 🔒 Security Status")
-    st.success("Authorized Session Active")
-    if st.button("🚪 Lock & Exit Terminal", use_container_width=True):
-        st.session_state.authenticated = False
-        st.rerun()
-    st.markdown("---")
-
 # -----------------------------------------------------------------------------
-# 3. TIMEZONE & MARKET CALENDAR ENGINE (08:50 AM PERSISTENCE RULE)
+# 3. TIMEZONE & 08:50 AM PERSISTENCE ENGINE
 # -----------------------------------------------------------------------------
 IST = pytz.timezone("Asia/Kolkata")
 now_ist = datetime.datetime.now(IST)
@@ -186,22 +171,16 @@ NSE_HOLIDAYS = {
 }
 
 def is_trading_day(dt):
-    """Checks if date is an official trading day (weekday and non-holiday)."""
     date_str = dt.strftime("%Y-%m-%d")
     return (dt.weekday() < 5) and (date_str not in NSE_HOLIDAYS)
 
 def get_last_active_trading_day(dt):
-    """Walks backwards to find the latest valid NSE trading day."""
     cursor = dt
     while not is_trading_day(cursor):
         cursor -= datetime.timedelta(days=1)
     return cursor
 
 def get_active_session_id(dt):
-    """
-    Session rolls over ONLY at 08:50 AM on an official trading day.
-    Outside that, it stays locked to the previous active market session.
-    """
     today_is_trading = is_trading_day(dt)
     cutoff = dt.replace(hour=8, minute=50, second=0, microsecond=0)
     
@@ -219,45 +198,62 @@ def load_persisted_snapshot():
         try:
             with open(SNAPSHOT_FILE, "r") as f:
                 data = json.load(f)
-                if data.get("session_id") == active_session_id:
+                if data.get("session_id") == active_session_id and data.get("is_real", False):
                     return data
         except Exception:
             pass
     return None
 
-def persist_snapshot(records, session_id):
+def persist_snapshot(records, session_id, is_real=True):
+    if not is_real:
+        return
     try:
         with open(SNAPSHOT_FILE, "w") as f:
             json.dump({
                 "session_id": session_id,
                 "saved_at": now_ist.strftime("%Y-%m-%d %H:%M:%S IST"),
+                "is_real": is_real,
                 "records": records
             }, f)
     except Exception:
         pass
 
+# Sidebar Controls
+with st.sidebar:
+    st.markdown("### ⚙️ Terminal Controls")
+    if st.button("🔄 Force Live Fetch (Clear Cache)", use_container_width=True):
+        if os.path.exists(SNAPSHOT_FILE):
+            os.remove(SNAPSHOT_FILE)
+        st.cache_data.clear()
+        st.rerun()
+
+    if st.button("🚪 Lock Terminal", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
+    st.markdown("---")
+
 # -----------------------------------------------------------------------------
-# 4. AUTO-REFRESH SCHEDULE CONTROLLER
+# 4. AUTO-REFRESH CONTROLLER
 # -----------------------------------------------------------------------------
 t = now_ist.time()
 if datetime.time(9, 8) <= t < datetime.time(9, 12):
-    refresh_rate = 3 * 1000       # 3 sec: Auction discovery
+    refresh_rate = 3 * 1000
     phase_text = "AUCTION DISCOVERY"
     badge_class = "badge-pre"
 elif datetime.time(9, 12) <= t < datetime.time(9, 15):
-    refresh_rate = 10 * 1000      # 10 sec: Final matched pre-open buffer
+    refresh_rate = 10 * 1000
     phase_text = "PRE-OPEN BUFFER"
     badge_class = "badge-pre"
 elif datetime.time(9, 15) <= t <= datetime.time(9, 30):
-    refresh_rate = 3 * 1000       # 3 sec: Market Opening live ticks
+    refresh_rate = 3 * 1000
     phase_text = "MARKET OPEN LIVE"
     badge_class = "badge-live"
 elif datetime.time(9, 30) < t <= datetime.time(15, 30):
-    refresh_rate = 30 * 1000      # 30 sec: Standard trading session
+    refresh_rate = 30 * 1000
     phase_text = "REGULAR SESSION"
     badge_class = "badge-live"
 else:
-    refresh_rate = None           # Off-hours: Paused / 08:50 AM Freeze
+    refresh_rate = None
     phase_text = "FROZEN (PERSISTED)"
     badge_class = "badge-freeze"
 
@@ -265,7 +261,7 @@ if st_autorefresh and refresh_rate:
     st_autorefresh(interval=refresh_rate, key="bluestone_timer")
 
 # -----------------------------------------------------------------------------
-# 5. DHAN API CLIENT & SECTOR DATABASE
+# 5. LIVE EXCHANGE INGESTION (DIRECT NSE + DHAN BACKEND)
 # -----------------------------------------------------------------------------
 DHAN_CLIENT_ID = st.secrets.get("DHAN_CLIENT_ID", "")
 DHAN_ACCESS_TOKEN = st.secrets.get("DHAN_ACCESS_TOKEN", "")
@@ -285,136 +281,167 @@ SECTOR_MAP = {
     "PAYTM": "Fintech", "POLICYBZR": "Fintech", "ETERNAL": "Consumer"
 }
 
-DHAN_BASE_URL = "https://api.dhan.co/v2"
-DHAN_HEADERS = {
-    "access-token": DHAN_ACCESS_TOKEN,
-    "client-id": DHAN_CLIENT_ID,
-    "Content-Type": "application/json",
-    "Accept": "application/json"
-}
-
-@st.cache_data(ttl=3600*12)
-def load_dhan_scrip_master():
-    url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+def fetch_live_nse_preopen():
+    """Fetches genuine real-time Pre-Open F&O settlement from NSE."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "application/json, text/plain, */*"
+    }
+    session = requests.Session()
     try:
-        df = pd.read_csv(url, low_memory=False)
-        return df[df["SEM_SEGMENT"] == "D"].copy()
-    except Exception:
-        return None
-
-def fetch_dhan_marketfeed(security_ids):
-    if not security_ids or not DHAN_ACCESS_TOKEN:
-        return {}
-    url = f"{DHAN_BASE_URL}/marketfeed/ohlc"
-    payload = {"NSE_FNO": [int(sid) for sid in security_ids]}
-    try:
-        resp = requests.post(url, headers=DHAN_HEADERS, json=payload, timeout=5)
+        session.get("https://www.nseindia.com", headers=headers, timeout=4)
+        url = "https://www.nseindia.com/api/market-data-pre-open?key=FO"
+        resp = session.get(url, headers=headers, timeout=5)
         if resp.status_code == 200:
-            return resp.json().get("data", {}).get("NSE_FNO", {})
+            data = resp.json().get("data", [])
+            stocks = []
+            for item in data:
+                meta = item.get("metadata", {})
+                sym = meta.get("symbol")
+                pc = meta.get("prevClose", 0.0)
+                final_p = meta.get("finalPrice", 0.0)
+                iep = meta.get("iep", final_p)
+                pchg = meta.get("pChange", 0.0)
+                if sym and pc > 0 and (final_p > 0 or iep > 0):
+                    stocks.append({
+                        "symbol": sym,
+                        "expiry": "Current Month",
+                        "prev_close": pc,
+                        "iep": iep if iep > 0 else final_p,
+                        "final_price": final_p if final_p > 0 else iep,
+                        "p_change": pchg,
+                        "open": meta.get("open", pc),
+                        "high": meta.get("high", max(pc, final_p)),
+                        "low": meta.get("low", min(pc, final_p)),
+                        "close": pc,
+                        "step": 50 if pc > 2000 else (20 if pc > 800 else 10)
+                    })
+            if stocks:
+                return sorted(stocks, key=lambda x: x["p_change"], reverse=True)[:10], "NSE Live Pre-Open"
     except Exception:
         pass
-    return {}
+    return None, None
 
-# -----------------------------------------------------------------------------
-# 6. DATA INGESTION & PIPELINE (FUTSTK DISCOVERY)
-# -----------------------------------------------------------------------------
-def fetch_top_positive_futures():
-    scrip_master = load_dhan_scrip_master()
-    if scrip_master is None:
-        return get_mock_snapshot()
+def fetch_live_dhan_futures():
+    """Fetches Top 10 Stock Futures via Dhan API."""
+    if not DHAN_ACCESS_TOKEN or not DHAN_CLIENT_ID:
+        return None, "Dhan credentials missing"
+
+    try:
+        # Check Scrip Master
+        url = "https://images.dhan.co/api-data/api-scrip-master.csv"
+        df = pd.read_csv(url, low_memory=False)
+        fno_df = df[df["SEM_SEGMENT"] == "D"].copy()
         
-    now = now_ist.replace(tzinfo=None)
-    fut_stocks = scrip_master[scrip_master["SEM_INSTRUMENT_NAME"] == "FUTSTK"].copy()
-    fut_stocks["SEM_EXPIRY_DATE"] = pd.to_datetime(fut_stocks["SEM_EXPIRY_DATE"])
-    near_expiry = fut_stocks[fut_stocks["SEM_EXPIRY_DATE"] >= now]["SEM_EXPIRY_DATE"].min()
-    
-    near_futs = fut_stocks[fut_stocks["SEM_EXPIRY_DATE"] == near_expiry]
-    sec_ids = near_futs["SEM_SMST_SECURITY_ID"].tolist()[:80]
-    
-    quotes = fetch_dhan_marketfeed(sec_ids)
-    if not quotes:
-        return get_mock_snapshot()
+        now = now_ist.replace(tzinfo=None)
+        fut_stocks = fno_df[fno_df["SEM_INSTRUMENT_NAME"] == "FUTSTK"].copy()
+        fut_stocks["SEM_EXPIRY_DATE"] = pd.to_datetime(fut_stocks["SEM_EXPIRY_DATE"])
+        near_expiry = fut_stocks[fut_stocks["SEM_EXPIRY_DATE"] >= now]["SEM_EXPIRY_DATE"].min()
+        near_futs = fut_stocks[fut_stocks["SEM_EXPIRY_DATE"] == near_expiry]
         
-    ranked = []
-    for _, row in near_futs.iterrows():
-        sid = str(row["SEM_SMST_SECURITY_ID"])
-        if sid in quotes:
-            q = quotes[sid]
-            ohlc = q.get("ohlc", {})
-            pc = ohlc.get("close", 0)
-            ltp = q.get("last_price", 0)
-            if pc > 0 and ltp > 0:
-                p_chg = ((ltp - pc) / pc) * 100
-                ranked.append({
-                    "symbol": row["SEM_CUSTOM_SYMBOL"],
-                    "expiry": near_expiry.strftime("%d-%b-%Y"),
-                    "prev_close": pc,
-                    "iep": ltp,
-                    "final_price": ltp,
-                    "p_change": p_chg,
-                    "open": ohlc.get("open", pc),
-                    "high": ohlc.get("high", ltp),
-                    "low": ohlc.get("low", pc),
-                    "close": pc
-                })
-                
-    top10 = sorted(ranked, key=lambda x: x["p_change"], reverse=True)[:10]
-    return top10 if top10 else get_mock_snapshot()
+        sec_ids = near_futs["SEM_SMST_SECURITY_ID"].tolist()[:80]
+        
+        # Query Dhan Marketfeed
+        murl = "https://api.dhan.co/v2/marketfeed/ohlc"
+        headers = {
+            "access-token": DHAN_ACCESS_TOKEN,
+            "client-id": DHAN_CLIENT_ID,
+            "Content-Type": "application/json"
+        }
+        resp = requests.post(murl, headers=headers, json={"NSE_FNO": [int(s) for s in sec_ids]}, timeout=5)
+        if resp.status_code == 200:
+            quotes = resp.json().get("data", {}).get("NSE_FNO", {})
+            ranked = []
+            for _, row in near_futs.iterrows():
+                sid = str(row["SEM_SMST_SECURITY_ID"])
+                if sid in quotes:
+                    q = quotes[sid]
+                    pc = q.get("ohlc", {}).get("close", 0)
+                    ltp = q.get("last_price", 0)
+                    if pc > 0 and ltp > 0:
+                        p_chg = ((ltp - pc) / pc) * 100
+                        ranked.append({
+                            "symbol": row["SEM_CUSTOM_SYMBOL"],
+                            "expiry": near_expiry.strftime("%d-%b-%Y"),
+                            "prev_close": pc,
+                            "iep": ltp,
+                            "final_price": ltp,
+                            "p_change": p_chg,
+                            "open": q.get("ohlc", {}).get("open", pc),
+                            "high": q.get("ohlc", {}).get("high", ltp),
+                            "low": q.get("ohlc", {}).get("low", pc),
+                            "close": pc,
+                            "step": 50 if pc > 2000 else (20 if pc > 800 else 10)
+                        })
+            if ranked:
+                return sorted(ranked, key=lambda x: x["p_change"], reverse=True)[:10], "Dhan Live API"
+    except Exception as e:
+        return None, str(e)
 
-def get_mock_snapshot():
-    """Accurate offline / fallback data reflecting real pre-open market structures."""
-    return [
-        {"symbol": "PAYTM", "expiry": "24-Sep-2026", "prev_close": 1758.60, "iep": 1783.50, "final_price": 1789.00, "p_change": 1.73, "open": 1755.0, "high": 1770.0, "low": 1750.0, "close": 1758.60, "step": 20},
-        {"symbol": "ZYDUSLIFE", "expiry": "24-Sep-2026", "prev_close": 1139.10, "iep": 1150.00, "final_price": 1157.90, "p_change": 1.65, "open": 1135.0, "high": 1145.0, "low": 1130.0, "close": 1139.10, "step": 10},
-        {"symbol": "BHARATFORG", "expiry": "24-Sep-2026", "prev_close": 1919.90, "iep": 1935.10, "final_price": 1948.00, "p_change": 1.46, "open": 1910.0, "high": 1928.0, "low": 1905.0, "close": 1919.90, "step": 20},
-        {"symbol": "ETERNAL", "expiry": "24-Sep-2026", "prev_close": 323.70, "iep": 326.00, "final_price": 327.85, "p_change": 1.28, "open": 321.0, "high": 325.0, "low": 320.0, "close": 323.70, "step": 5},
-        {"symbol": "INDIGO", "expiry": "24-Sep-2026", "prev_close": 4879.00, "iep": 4900.00, "final_price": 4940.00, "p_change": 1.25, "open": 4860.0, "high": 4895.0, "low": 4850.0, "close": 4879.00, "step": 50},
-        {"symbol": "JSWSTEEL", "expiry": "24-Sep-2026", "prev_close": 1259.80, "iep": 1272.00, "final_price": 1274.50, "p_change": 1.17, "open": 1250.0, "high": 1265.0, "low": 1248.0, "close": 1259.80, "step": 20},
-        {"symbol": "POLICYBZR", "expiry": "24-Sep-2026", "prev_close": 1760.60, "iep": 1768.30, "final_price": 1779.00, "p_change": 1.05, "open": 1750.0, "high": 1765.0, "low": 1745.0, "close": 1760.60, "step": 20},
-        {"symbol": "HINDZINC", "expiry": "24-Sep-2026", "prev_close": 573.95, "iep": 580.00, "final_price": 580.00, "p_change": 1.05, "open": 570.0, "high": 576.0, "low": 568.0, "close": 573.95, "step": 10},
-        {"symbol": "POWERINDIA", "expiry": "24-Sep-2026", "prev_close": 31430.00, "iep": 31600.00, "final_price": 31750.00, "p_change": 1.02, "open": 31300.0, "high": 31500.0, "low": 31200.0, "close": 31430.00, "step": 200},
-        {"symbol": "MUTHOOTFIN", "expiry": "24-Sep-2026", "prev_close": 2781.40, "iep": 2788.00, "final_price": 2808.00, "p_change": 0.96, "open": 2760.0, "high": 2790.0, "low": 2750.0, "close": 2781.40, "step": 20},
-    ]
+    return None, "Dhan marketfeed returned empty"
 
 # -----------------------------------------------------------------------------
-# 7. STRATEGY ENGINE & METRIC PROCESSOR
+# 6. CORE CALCULATION ENGINE
 # -----------------------------------------------------------------------------
 def build_terminal_dataset():
+    # 1. Check persistence cache (persisted until 08:50 AM)
     cached = load_persisted_snapshot()
     curr_time = now_ist.time()
     is_live_phase = datetime.time(9, 0) <= curr_time <= datetime.time(15, 30)
     
     if not is_live_phase and cached:
-        return pd.DataFrame(cached["records"])
-        
-    top_stocks = fetch_top_positive_futures()
-    is_after_915 = curr_time >= datetime.time(9, 15)
+        return pd.DataFrame(cached["records"]), "PERSISTED (Frozen until 08:50 AM)", True
+
+    # 2. Ingest live data: Try NSE direct first, then Dhan API
+    top_stocks, source_label = fetch_live_nse_preopen()
+    is_real_data = True
     
+    if not top_stocks:
+        top_stocks, source_label = fetch_live_dhan_futures()
+
+    # 3. Fallback only if exchange servers are completely unreachable
+    if not top_stocks:
+        if cached:
+            return pd.DataFrame(cached["records"]), "PERSISTED (Previous Session)", True
+        is_real_data = False
+        source_label = "⚠️ OFFLINE / TEST MODEL (Exchange Unreachable)"
+        top_stocks = [
+            {"symbol": "TATAMOTORS", "expiry": "Current Month", "prev_close": 960.0, "iep": 985.0, "final_price": 988.0, "p_change": 2.91, "open": 955.0, "high": 968.0, "low": 950.0, "close": 960.0, "step": 20},
+            {"symbol": "INFY", "expiry": "Current Month", "prev_close": 1880.0, "iep": 1920.0, "final_price": 1925.0, "p_change": 2.39, "open": 1870.0, "high": 1895.0, "low": 1865.0, "close": 1880.0, "step": 50},
+            {"symbol": "RELIANCE", "expiry": "Current Month", "prev_close": 2930.0, "iep": 2980.0, "final_price": 2985.0, "p_change": 1.87, "open": 2915.0, "high": 2945.0, "low": 2905.0, "close": 2930.0, "step": 50},
+            {"symbol": "ICICIBANK", "expiry": "Current Month", "prev_close": 1242.0, "iep": 1262.0, "final_price": 1265.0, "p_change": 1.85, "open": 1238.0, "high": 1248.0, "low": 1235.0, "close": 1242.0, "step": 20},
+            {"symbol": "SBIN", "expiry": "Current Month", "prev_close": 824.0, "iep": 836.0, "final_price": 838.0, "p_change": 1.69, "open": 820.0, "high": 828.0, "low": 818.0, "close": 824.0, "step": 10},
+            {"symbol": "TCS", "expiry": "Current Month", "prev_close": 4200.0, "iep": 4260.0, "final_price": 4265.0, "p_change": 1.54, "open": 4180.0, "high": 4220.0, "low": 4175.0, "close": 4200.0, "step": 50},
+            {"symbol": "BHARTIARTL", "expiry": "Current Month", "prev_close": 1562.0, "iep": 1582.0, "final_price": 1585.0, "p_change": 1.47, "open": 1550.0, "high": 1568.0, "low": 1545.0, "close": 1562.0, "step": 20},
+            {"symbol": "HDFCBANK", "expiry": "Current Month", "prev_close": 1672.0, "iep": 1692.0, "final_price": 1695.0, "p_change": 1.37, "open": 1665.0, "high": 1678.0, "low": 1660.0, "close": 1672.0, "step": 20},
+            {"symbol": "LT", "expiry": "Current Month", "prev_close": 3640.0, "iep": 3680.0, "final_price": 3685.0, "p_change": 1.23, "open": 3620.0, "high": 3650.0, "low": 3615.0, "close": 3640.0, "step": 50},
+            {"symbol": "AXISBANK", "expiry": "Current Month", "prev_close": 1205.0, "iep": 1218.0, "final_price": 1220.0, "p_change": 1.24, "open": 1198.0, "high": 1210.0, "low": 1195.0, "close": 1205.0, "step": 20},
+        ]
+
+    is_after_915 = curr_time >= datetime.time(9, 15)
     rows = []
+
     for s in top_stocks:
         sym = s["symbol"]
         sector = SECTOR_MAP.get(sym, "General F&O")
         expiry = s.get("expiry", "Current Month")
         step = s.get("step", 20)
         
-        # 1. Auction Prices
         pc = s["prev_close"]
         iep = s["iep"]
         final_p = s.get("final_price", iep)
         working_price = final_p if final_p > 0 else iep
         
-        # 2. Future Prev OHLC
         o, h, l, c = s["open"], s["high"], s["low"], s["close"]
         
-        # 3. Gap Up Validation Rule:
+        # Rule 1: Gap Up Valid if working price > Future Prev High
         gap_up_valid = working_price > h
         gap_up_display = "🟢 Valid" if gap_up_valid else "🔴 Invalid"
         
-        # 4. Strike Identification
         closing_strike = round(pc / step) * step
         preopen_strike = round(working_price / step) * step
         
-        # 5. Prev Close Strike Metrics
         base_prem = round(closing_strike * 0.021, 2)
         ce_close = round(base_prem * 1.05, 2)
         pe_close = round(base_prem * 0.95, 2)
@@ -423,12 +450,11 @@ def build_terminal_dataset():
         prev_ce_high = round(ce_close * 1.15, 2)
         prev_pe_low = round(pe_close * 0.85, 2)
         
-        # 6. Pre-Open Strike Previous Day OHLC
         pre_base = round(preopen_strike * 0.021, 2)
         pre_ce_ohlc = f"{pre_base*0.95:.1f} | {pre_base*1.2:.1f} | {pre_base*0.9:.1f} | {pre_base*1.08:.1f}"
         pre_pe_ohlc = f"{pre_base*1.1:.1f} | {pre_base*1.15:.1f} | {pre_base*0.8:.1f} | {pre_base*0.9:.1f}"
         
-        # 7. Live CE / PE LTP Rule (Strictly Blank until 09:15 AM)
+        # Rule 2: Live LTP strictly blank until 09:15 AM
         if is_after_915:
             live_ce_ltp = round(ce_close * (1.22 if gap_up_valid else 0.95), 2)
             live_pe_ltp = round(pe_close * (0.80 if gap_up_valid else 1.05), 2)
@@ -438,7 +464,7 @@ def build_terminal_dataset():
             live_pe_ltp = None
             live_ltp_display = "—"
             
-        # 8. Setup Qualification Engine (4-Point Breakout Test)
+        # Rule 3: Setup Qualification Engine
         if not is_after_915:
             setup = "⏳ Waiting"
             setup_reason = "Pre-market window (LTP opens 09:15)"
@@ -461,7 +487,6 @@ def build_terminal_dataset():
                     setup = "🟢 Entry"
                     setup_reason = "All 4 Breakout Rules Met"
                     
-                    # 9. Trade & Result Execution Logic
                     entry_price = live_ce_ltp
                     stop_loss = round(entry_price * 0.90, 2)
                     target = max(pe_close, round(entry_price * 1.30, 2))
@@ -504,17 +529,18 @@ def build_terminal_dataset():
             "Result": result_status
         })
         
-    if rows:
-        persist_snapshot(rows, active_session_id)
+    # Persist ONLY if data is genuine
+    if rows and is_real_data:
+        persist_snapshot(rows, active_session_id, is_real=True)
         
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows), source_label, is_real_data
 
 # -----------------------------------------------------------------------------
-# 8. UI RENDER: THE BLUESTONE TERMINAL & COLUMN VISIBILITY
+# 7. UI RENDER
 # -----------------------------------------------------------------------------
-df_master = build_terminal_dataset()
+df_master, feed_label, is_real = build_terminal_dataset()
 
-# Top Obsidian Banner
+# Top Header Banner
 st.markdown(f"""
     <div class="bluestone-header">
         <div class="logo-container">
@@ -532,9 +558,14 @@ st.markdown(f"""
     </div>
 """, unsafe_allow_html=True)
 
-# Preset Views Configuration
-ALL_COLUMNS = list(df_master.columns)
+# Feed status badge
+if is_real:
+    st.markdown(f"<div style='margin-bottom: 8px;'><span style='background:#064e3b; color:#34d399; font-weight:700; padding:3px 8px; border-radius:5px; font-size:0.8rem;'>FEED: {feed_label}</span></div>", unsafe_allow_html=True)
+else:
+    st.markdown(f"<div style='margin-bottom: 8px;'><span style='background:#7f1d1d; color:#fca5a5; font-weight:700; padding:3px 8px; border-radius:5px; font-size:0.8rem;'>{feed_label}</span></div>", unsafe_allow_html=True)
 
+# Column Controls
+ALL_COLUMNS = list(df_master.columns)
 PRESETS = {
     "Full View (All 19 Columns)": ALL_COLUMNS,
     "Executive / Trade View (8 Cols)": [
@@ -548,7 +579,6 @@ PRESETS = {
     ]
 }
 
-# Column Visibility Ribbon
 with st.expander("👁️ Column Visibility & Layout Controls", expanded=False):
     c_preset, c_custom = st.columns([1, 3])
     with c_preset:
@@ -560,20 +590,16 @@ with st.expander("👁️ Column Visibility & Layout Controls", expanded=False):
             default=PRESETS[chosen_preset]
         )
 
-# Fallback in case user deselects all columns
 if not selected_columns:
     selected_columns = PRESETS["Executive / Trade View (8 Cols)"]
 
-df_display = df_master[selected_columns]
-
 st.dataframe(
-    df_display,
+    df_master[selected_columns],
     use_container_width=True,
     hide_index=True,
     height=420
 )
 
-# Operational Strategy Footnote
 st.caption(
     "📌 **The BlueStone Protocol:** "
     "① **Gap Up Valid:** Discovered Future Price > Prev Day High. "
